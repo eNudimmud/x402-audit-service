@@ -1,15 +1,16 @@
 # ENKI x402 Audit Service — multi-stage build
-FROM node:22-alpine AS build
+# NOTE: use Debian (slim, glibc) not alpine: @x402/* deps pull native/crypto
+# bindings (Solana web3, tweetnacl) that fail under alpine/musl at npm ci.
+FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-# Reuse the already-built tree (incl. prod deps) from the build stage
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
