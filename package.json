@@ -1,0 +1,26 @@
+{
+  "name": "enki-x402-audit-service",
+  "version": "0.1.0",
+  "description": "x402 payment-gated code security/quality audit API. Seller side. Receives USDC on Solana.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/endpoint.test.mjs"
+  },
+  "dependencies": {
+    "@x402/core": "^2.0.0",
+    "@x402/express": "^2.0.0",
+    "@x402/svm": "^2.0.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

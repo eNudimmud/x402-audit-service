@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: enki-x402-audit
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free   # free tier works; note: spins down when idle (cold start on first call)
+    healthCheckPath: /health
+    envVars:
+      - key: PAY_TO
+        sync: false   # you provide your receiving Solana address
+      - key: AUDIT_PRICE_USD
+        value: "$0.05"
+      - key: X402_NETWORK
+        value: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+      - key: CDP_API_KEY
+        sync: false   # you provide (CDP free tier, 1000 settles/mo)
+      - key: CDP_API_SECRET
+        sync: false   # you provide
+      - key: LLM_PROVIDER
+        value: "none"
