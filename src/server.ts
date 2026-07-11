@@ -28,7 +28,17 @@ const PAY_TO = process.env.PAY_TO ?? "EAMNyeugCfvCyXX4SZ3tUXM6fWxovYJWTCw2Jbqmeu
 const PRICE = process.env.AUDIT_PRICE_USD ?? "$0.05";
 const CDP_KEY = process.env.CDP_API_KEY;
 const CDP_SECRET = process.env.CDP_API_SECRET;
-const USE_CDP = Boolean(CDP_KEY && CDP_SECRET);
+// Only use CDP (mainnet) when explicitly enabled AND keys present.
+// Without X402_MAINNET=1 we run on Solana devnet via the public x402.org
+// facilitator — this keeps the service LIVE even if CDP keys are missing,
+// invalid, or IP-allowlisted (which would otherwise 401 at boot).
+const USE_CDP = process.env.X402_MAINNET === "1" && Boolean(CDP_KEY && CDP_SECRET);
+if (CDP_KEY && !USE_CDP) {
+  console.warn(
+    "[enki-x402] CDP_API_KEY present but X402_MAINNET != '1' — running on devnet (x402.org). " +
+    "Set X402_MAINNET=1 (with valid CDP keys + IP-allowlist opt-out) for mainnet USDC.",
+  );
+}
 
 // Network selection:
 //  - With CDP keys (production): mainnet — the CDP facilitator supports it.
