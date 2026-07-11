@@ -26,14 +26,21 @@ import type { AuditReport } from "./types.js";
 const PORT = Number(process.env.PORT ?? 4021);
 const PAY_TO = process.env.PAY_TO ?? "EAMNyeugCfvCyXX4SZ3tUXM6fWxovYJWTCw2JbqmeueR";
 const PRICE = process.env.AUDIT_PRICE_USD ?? "$0.05";
-// Default: Solana mainnet (production). Override for local testing, e.g.
-// X402_NETWORK=solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 (Solana Devnet, testnet facilitator).
-const NETWORK = (process.env.X402_NETWORK ??
-  "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp") as `${string}:${string}`; // CAIP-2
-
 const CDP_KEY = process.env.CDP_API_KEY;
 const CDP_SECRET = process.env.CDP_API_SECRET;
 const USE_CDP = Boolean(CDP_KEY && CDP_SECRET);
+
+// Network selection:
+//  - With CDP keys (production): mainnet — the CDP facilitator supports it.
+//  - Without CDP keys (testnet fallback x402.org): force Solana DEVNET, because
+//    the x402.org testnet facilitator only supports `exact` on solana devnet,
+//    not on mainnet (would crash at boot with a RouteConfigurationError).
+const MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+const NETWORK = (USE_CDP
+  ? (process.env.X402_NETWORK ?? MAINNET)
+  : DEVNET) as `${string}:${string}`; // CAIP-2
+
 const FACILITATOR_URL = USE_CDP
   ? "https://api.cdp.coinbase.com/platform/v2/x402"
   : "https://x402.org/facilitator"; // testnet fallback, no signup
