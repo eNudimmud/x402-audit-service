@@ -4,18 +4,18 @@
  * POST /audit  -> payment-gated code security/quality audit.
  * GET  /       -> service metadata (no payment).
  * GET  /health -> liveness (no payment).
+ * GET  /debug  -> config resolution (no secrets leaked).
  *
  * Payment: x402 v2, exact scheme, Solana mainnet.
  * Recipient (payTo): the Enki agent's Sponge Solana wallet.
  *
  * Facilitator:
  *  - Production: CDP facilitator (requires CDP_API_KEY + CDP_API_SECRET).
- *  - Fallback (no CDP keys): x402.org public facilitator (testnet, no signup)
- *    so the service runs and can be tested locally without an account.
+ *  - Fallback (no CDP keys / blocked): x402.org public facilitator (devnet)
+ *    so the service runs and stays LIVE regardless of CDP account state.
  */
 
 import express from "express";
-import { createHash } from "node:crypto";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -29,21 +29,17 @@ const PAY_TO = process.env.PAY_TO ?? "EAMNyeugCfvCyXX4SZ3tUXM6fWxovYJWTCw2Jbqmeu
 const PRICE = process.env.AUDIT_PRICE_USD ?? "$0.05";
 const CDP_KEY = process.env.CDP_API_KEY;
 const CDP_SECRET = process.env.CDP_API_SECRET;
-// Network selection:
+
 const MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
 // Use CDP (mainnet) when CDP keys are present AND the network is mainnet.
 // Mainnet is signalled by X402_NETWORK=solana:5eykt... (the value you already
-// set on Render) OR by X402_MAINNET=1. Without that we run on Solana devnet
-// via the public x402.org facilitator, so the service stays LIVE regardless.
-const WANT_MAINNET =
-  process.env.X402_MAINNET === "1" ||
-  process.env.X402_NETWORK === MAINNET;
+// set on Render). Without that we run on Solana devnet via the public
+// x402.org facilitator, so the service stays LIVE regardless.
+const WANT_MAINNET = process.env.X402_NETWORK === MAINNET;
 const WANT_CDP = WANT_MAINNET && Boolean(CDP_KEY && CDP_SECRET);
 
-// The x402.org testnet facilitator only supports `exact` on solana devnet,
-// not on mainnet (would crash at boot). Default to devnet.
 const FACILITATOR_URL_DEVNET = "https://x402.org/facilitator";
 const FACILITATOR_URL_CDP = "https://api.cdp.coinbase.com/platform/v2/x402";
 
@@ -52,34 +48,30 @@ let NETWORK = DEVNET as `${string}:${string}`;
 let FACILITATOR_URL = FACILITATOR_URL_DEVNET;
 let CDP_BLOCKED_REASON = "";
 
-// Probe the CDP facilitator BEFORE building the server. If it returns 401
-// (e.g. IP-allowlist not opted out) we MUST fall back to devnet, otherwise
-// paymentMiddleware.initialize() throws at boot and Render marks the
-// service as crashed (red). This keeps the service LIVE regardless of CDP
-// account state.
+// Probe the CDP facilitator BEFORE building the server. If it returns a
+// non-200 we fall back to devnet, so the service stays LIVE on Render
+// regardless of CDP account state. Uses GET /supported (the SDK's method).
 async function resolveFacilitator(): Promise<void> {
   if (!WANT_CDP) {
     if (CDP_KEY) {
       console.warn(
         "[enki-x402] CDP_API_KEY present but network is not mainnet — running on devnet (x402.org). " +
-          "Set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp (or X402_MAINNET=1) for mainnet USDC.",
+          "Set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp for mainnet USDC.",
       );
     }
     return;
   }
   try {
-    // The CDP facilitator requires a Bearer JWT generated from the Secret API
-    // Key (not HMAC). We use the official CDP SDK to mint a short-lived token.
     const jwt = await generateJwt({
       apiKeyId: CDP_KEY!,
       apiKeySecret: CDP_SECRET!,
-      requestMethod: "POST",
+      requestMethod: "GET",
       requestHost: "api.cdp.coinbase.com",
       requestPath: "/platform/v2/x402/supported",
       expiresIn: 120,
     });
     const res = await fetch(`${FACILITATOR_URL_CDP}/supported`, {
-      method: "POST",
+      method: "GET",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${jwt}`,
@@ -102,7 +94,7 @@ async function resolveFacilitator(): Promise<void> {
     console.warn(
       `[enki-x402] CDP facilitator blocked (${CDP_BLOCKED_REASON || String(err)}). ` +
         "Falling back to DEVNET (x402.org). Service stays LIVE. " +
-        "To enable mainnet: set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp (or X402_MAINNET=1) + valid CDP keys.",
+        "To enable mainnet: set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp + valid CDP keys.",
     );
   }
 }
@@ -111,90 +103,59 @@ const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "none"; // none | openai | anth
 
 // ---- CDP facilitator auth (Bearer JWT via CDP SDK) -------------------------
 // The CDP production facilitator requires a short-lived Bearer JWT minted from
-// the Secret API Key. We generate it per-request so it never expires at boot.
-async function cdpAuthHeaders(): Promise<{
-  verify: Record<string, string>;
-  settle: Record<string, string>;
-  supported: Record<string, string>;
-}> {
+// the Secret API Key, signed PER OPERATION (the SDK calls createAuthHeaders with
+// the operation kind: "supported" | "verify" | "settle"). Each has its own
+// method + path, so we mint a fresh JWT for each. The SDK reads `.headers`.
+const CDP_OPS: Record<string, { method: "GET" | "POST"; path: string }> = {
+  supported: { method: "GET", path: "/platform/v2/x402/supported" },
+  verify: { method: "POST", path: "/platform/v2/x402/verify" },
+  settle: { method: "POST", path: "/platform/v2/x402/settle" },
+};
+
+async function cdpAuthHeaders(_kind?: string): Promise<{ headers: Record<string, string> }> {
+  const kind = _kind ?? "verify";
+  const op = CDP_OPS[kind] ?? CDP_OPS.verify;
   const jwt = await generateJwt({
     apiKeyId: CDP_KEY!,
     apiKeySecret: CDP_SECRET!,
-    requestMethod: "POST",
+    requestMethod: op.method,
     requestHost: "api.cdp.coinbase.com",
-    requestPath: "/platform/v2/x402",
+    requestPath: op.path,
     expiresIn: 120,
   });
-  const headers = { Authorization: `Bearer ${jwt}` };
-  return { verify: headers, settle: headers, supported: headers };
+  return { headers: { Authorization: `Bearer ${jwt}` } };
 }
 
 // ---- Facilitator + resource server ----------------------------------------
-// Resolve facilitator mode (mainnet CDP vs devnet fallback) BEFORE building.
 async function boot(): Promise<void> {
   await resolveFacilitator();
 
+  // Build the facilitator client (with per-operation CDP JWT auth when live).
   const facilitatorClient = new HTTPFacilitatorClient({
     url: FACILITATOR_URL,
     ...(USE_CDP
-      ? { createAuthHeaders: async () => cdpAuthHeaders() }
+      ? {
+          createAuthHeaders: cdpAuthHeaders as unknown as () => Promise<{
+            verify: Record<string, string>;
+            settle: Record<string, string>;
+            supported: Record<string, string>;
+          }>,
+        }
       : {}),
   });
 
-  const server = new x402ResourceServer(facilitatorClient).register(
-    NETWORK,
-    new ExactSvmScheme(),
-  );
+  // NOTE: the published @x402 .d.mts types for x402ResourceServer.register()
+  // are stale (declares 0 args). The runtime + official docs use
+  // `new x402ResourceServer(client).register(network, scheme)`. Cast through
+  // `any` so tsc stops fighting the real runtime shape.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const server: any = new (x402ResourceServer as any)(facilitatorClient);
+  server.register(NETWORK, new (ExactSvmScheme as any)(PAY_TO));
 
-// ---- App -------------------------------------------------------------------
+  // ---- App -----------------------------------------------------------------
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
-  // Public metadata (no payment required)
-  app.get("/", (_req, res) => {
-    res.json({
-      service: "enki-x402-audit-service",
-      version: "0.1.0",
-      description: "Payment-gated code security/quality audit via x402 (Solana/USDC).",
-      network: NETWORK,
-      payTo: PAY_TO,
-      price: PRICE,
-      facilitator: FACILITATOR_URL,
-      llmEnrichment: LLM_PROVIDER,
-      endpoints: {
-        "POST /audit": "Body: { code, language?, scope? } -> AuditReport (payment required)",
-        "GET /health": "Liveness probe (no payment)",
-      },
-    });
-  });
-
-  app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-
-  // Debug endpoint: shows config resolution WITHOUT leaking secrets.
-  // Useful to diagnose why mainnet isn't active on a remote deploy.
-  app.get("/debug", (_req, res) =>
-    res.json({
-      WANT_MAINNET,
-      WANT_CDP,
-      USE_CDP,
-      NETWORK,
-      FACILITATOR_URL,
-      CDP_BLOCKED_REASON,
-      env: {
-        X402_NETWORK: process.env.X402_NETWORK ?? null,
-        X402_MAINNET: process.env.X402_MAINNET ?? null,
-        CDP_API_KEY_present: Boolean(CDP_KEY),
-        CDP_API_KEY_prefix: CDP_KEY ? CDP_KEY.slice(0, 6) + "…" : null,
-        CDP_API_SECRET_present: Boolean(CDP_SECRET),
-        PAY_TO,
-        AUDIT_PRICE_USD: PRICE,
-        LLM_PROVIDER,
-      },
-      expectedMainnet: MAINNET,
-    }),
-  );
-
-  // Payment-gated audit endpoint
   app.use(
     paymentMiddleware(
       {
@@ -215,6 +176,48 @@ async function boot(): Promise<void> {
     ),
   );
 
+  app.get("/", (_req, res) => {
+    res.json({
+      service: "enki-x402-audit-service",
+      version: "0.1.0",
+      description: "Payment-gated code security/quality audit via x402 (Solana/USDC).",
+      network: NETWORK,
+      payTo: PAY_TO,
+      price: PRICE,
+      facilitator: FACILITATOR_URL,
+      llmEnrichment: LLM_PROVIDER,
+      endpoints: {
+        "POST /audit": "Body: { code, language?, scope? } -> AuditReport (payment required)",
+        "GET /health": "Liveness probe (no payment)",
+        "GET /debug": "Config resolution (no secrets)",
+      },
+    });
+  });
+
+  app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+  // Debug endpoint: shows config resolution WITHOUT leaking secrets.
+  app.get("/debug", (_req, res) =>
+    res.json({
+      WANT_MAINNET,
+      WANT_CDP,
+      USE_CDP,
+      NETWORK,
+      FACILITATOR_URL,
+      CDP_BLOCKED_REASON,
+      env: {
+        X402_NETWORK: process.env.X402_NETWORK ?? null,
+        CDP_API_KEY_present: Boolean(CDP_KEY),
+        CDP_API_KEY_prefix: CDP_KEY ? CDP_KEY.slice(0, 6) + "…" : null,
+        CDP_API_SECRET_present: Boolean(CDP_SECRET),
+        PAY_TO,
+        AUDIT_PRICE_USD: PRICE,
+        LLM_PROVIDER,
+      },
+      expectedMainnet: MAINNET,
+    }),
+  );
+
   app.post("/audit", async (req, res) => {
     const { code, language, scope } = req.body ?? {};
     if (typeof code !== "string" || code.length === 0) {
@@ -226,7 +229,6 @@ async function boot(): Promise<void> {
 
     const report: AuditReport = auditCode({ code, language, scope });
 
-    // Optional LLM enrichment (kept separate so the service works without keys)
     if (LLM_PROVIDER !== "none") {
       try {
         report.summary = `[${LLM_PROVIDER} enrichment unavailable in this build] ` + report.summary;
@@ -239,9 +241,10 @@ async function boot(): Promise<void> {
   });
 
   app.listen(PORT, () => {
-    console.log(`[enki-x402] audit service listening on http://localhost:${PORT}`);
-    console.log(`[enki-x402] payTo=${PAY_TO} network=${NETWORK} price=${PRICE}`);
-    console.log(`[enki-x402] facilitator=${FACILITATOR_URL}${USE_CDP ? " (CDP mainnet)" : " (x402.org devnet fallback)"}`);
+    console.log("[enki-x402] audit service listening on http://localhost:" + PORT);
+    console.log("[enki-x402] payTo=" + PAY_TO + " network=" + NETWORK + " price=" + PRICE);
+    const mode = USE_CDP ? " (CDP mainnet)" : " (x402.org devnet fallback)";
+    console.log("[enki-x402] facilitator=" + FACILITATOR_URL + mode);
   });
 }
 
