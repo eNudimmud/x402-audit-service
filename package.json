@@ -12,6 +12,7 @@
     "test": "node test/endpoint.test.mjs"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.52.0",
     "@x402/core": "^2.0.0",
     "@x402/express": "^2.0.0",
     "@x402/svm": "^2.0.0",

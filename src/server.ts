@@ -15,7 +15,8 @@
  */
 
 import express from "express";
-import { createHmac, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
+import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
@@ -63,19 +64,21 @@ async function resolveFacilitator(): Promise<void> {
     return;
   }
   try {
-    // CDP facilitator `supported` endpoint requires HMAC auth headers.
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const method = "POST";
-    const path = "/platform/v2/x402";
-    const payload = `${timestamp}${method}${path}`;
-    const signature = createHmac("sha256", CDP_SECRET!).update(payload).digest("hex");
+    // The CDP facilitator requires a Bearer JWT generated from the Secret API
+    // Key (not HMAC). We use the official CDP SDK to mint a short-lived token.
+    const jwt = await generateJwt({
+      apiKeyId: CDP_KEY!,
+      apiKeySecret: CDP_SECRET!,
+      requestMethod: "POST",
+      requestHost: "api.cdp.coinbase.com",
+      requestPath: "/platform/v2/x402/supported",
+      expiresIn: 120,
+    });
     const res = await fetch(`${FACILITATOR_URL_CDP}/supported`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "CDP-API-KEY": CDP_KEY!,
-        "CDP-API-TIMESTAMP": timestamp,
-        "CDP-API-SIGNATURE": signature,
+        Authorization: `Bearer ${jwt}`,
       },
       signal: AbortSignal.timeout(8000),
     });
@@ -102,24 +105,23 @@ async function resolveFacilitator(): Promise<void> {
 
 const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "none"; // none | openai | anthropic
 
-// ---- CDP facilitator auth (HMAC-SHA256 over timestamp.method.path) --------
-// Required only for the CDP production facilitator; the x402.org testnet
-// facilitator needs no auth.
-function cdpAuthHeaders(): {
+// ---- CDP facilitator auth (Bearer JWT via CDP SDK) -------------------------
+// The CDP production facilitator requires a short-lived Bearer JWT minted from
+// the Secret API Key. We generate it per-request so it never expires at boot.
+async function cdpAuthHeaders(): Promise<{
   verify: Record<string, string>;
   settle: Record<string, string>;
   supported: Record<string, string>;
-} {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const method = "POST";
-  const path = "/platform/v2/x402";
-  const payload = `${timestamp}${method}${path}`;
-  const signature = createHmac("sha256", CDP_SECRET!).update(payload).digest("hex");
-  const headers = {
-    "CDP-API-KEY": CDP_KEY!,
-    "CDP-API-TIMESTAMP": timestamp,
-    "CDP-API-SIGNATURE": signature,
-  };
+}> {
+  const jwt = await generateJwt({
+    apiKeyId: CDP_KEY!,
+    apiKeySecret: CDP_SECRET!,
+    requestMethod: "POST",
+    requestHost: "api.cdp.coinbase.com",
+    requestPath: "/platform/v2/x402",
+    expiresIn: 120,
+  });
+  const headers = { Authorization: `Bearer ${jwt}` };
   return { verify: headers, settle: headers, supported: headers };
 }
 
