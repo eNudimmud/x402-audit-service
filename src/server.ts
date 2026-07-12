@@ -170,6 +170,30 @@ async function boot(): Promise<void> {
 
   app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
+  // Debug endpoint: shows config resolution WITHOUT leaking secrets.
+  // Useful to diagnose why mainnet isn't active on a remote deploy.
+  app.get("/debug", (_req, res) =>
+    res.json({
+      WANT_MAINNET,
+      WANT_CDP,
+      USE_CDP,
+      NETWORK,
+      FACILITATOR_URL,
+      CDP_BLOCKED_REASON,
+      env: {
+        X402_NETWORK: process.env.X402_NETWORK ?? null,
+        X402_MAINNET: process.env.X402_MAINNET ?? null,
+        CDP_API_KEY_present: Boolean(CDP_KEY),
+        CDP_API_KEY_prefix: CDP_KEY ? CDP_KEY.slice(0, 6) + "…" : null,
+        CDP_API_SECRET_present: Boolean(CDP_SECRET),
+        PAY_TO,
+        AUDIT_PRICE_USD: PRICE,
+        LLM_PROVIDER,
+      },
+      expectedMainnet: MAINNET,
+    }),
+  );
+
   // Payment-gated audit endpoint
   app.use(
     paymentMiddleware(
