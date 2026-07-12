@@ -29,14 +29,18 @@ const PAY_TO = process.env.PAY_TO ?? "EAMNyeugCfvCyXX4SZ3tUXM6fWxovYJWTCw2Jbqmeu
 const PRICE = process.env.AUDIT_PRICE_USD ?? "$0.05";
 const CDP_KEY = process.env.CDP_API_KEY;
 const CDP_SECRET = process.env.CDP_API_SECRET;
-// Only use CDP (mainnet) when explicitly enabled AND keys present.
-// Without X402_MAINNET=1 we run on Solana devnet via the public x402.org
-// facilitator — this keeps the service LIVE even if CDP keys are missing.
-const WANT_CDP = process.env.X402_MAINNET === "1" && Boolean(CDP_KEY && CDP_SECRET);
-
 // Network selection:
 const MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+
+// Use CDP (mainnet) when CDP keys are present AND the network is mainnet.
+// Mainnet is signalled by X402_NETWORK=solana:5eykt... (the value you already
+// set on Render) OR by X402_MAINNET=1. Without that we run on Solana devnet
+// via the public x402.org facilitator, so the service stays LIVE regardless.
+const WANT_MAINNET =
+  process.env.X402_MAINNET === "1" ||
+  process.env.X402_NETWORK === MAINNET;
+const WANT_CDP = WANT_MAINNET && Boolean(CDP_KEY && CDP_SECRET);
 
 // The x402.org testnet facilitator only supports `exact` on solana devnet,
 // not on mainnet (would crash at boot). Default to devnet.
@@ -57,8 +61,8 @@ async function resolveFacilitator(): Promise<void> {
   if (!WANT_CDP) {
     if (CDP_KEY) {
       console.warn(
-        "[enki-x402] CDP_API_KEY present but X402_MAINNET != '1' — running on devnet (x402.org). " +
-          "Set X402_MAINNET=1 (with valid CDP keys + IP-allowlist opt-out) for mainnet USDC.",
+        "[enki-x402] CDP_API_KEY present but network is not mainnet — running on devnet (x402.org). " +
+          "Set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp (or X402_MAINNET=1) for mainnet USDC.",
       );
     }
     return;
@@ -98,7 +102,7 @@ async function resolveFacilitator(): Promise<void> {
     console.warn(
       `[enki-x402] CDP facilitator blocked (${CDP_BLOCKED_REASON || String(err)}). ` +
         "Falling back to DEVNET (x402.org). Service stays LIVE. " +
-        "To enable mainnet: opt out of CDP IP-allowlist + set X402_MAINNET=1.",
+        "To enable mainnet: set X402_NETWORK=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp (or X402_MAINNET=1) + valid CDP keys.",
     );
   }
 }
