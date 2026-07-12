@@ -30,30 +30,75 @@ const CDP_KEY = process.env.CDP_API_KEY;
 const CDP_SECRET = process.env.CDP_API_SECRET;
 // Only use CDP (mainnet) when explicitly enabled AND keys present.
 // Without X402_MAINNET=1 we run on Solana devnet via the public x402.org
-// facilitator — this keeps the service LIVE even if CDP keys are missing,
-// invalid, or IP-allowlisted (which would otherwise 401 at boot).
-const USE_CDP = process.env.X402_MAINNET === "1" && Boolean(CDP_KEY && CDP_SECRET);
-if (CDP_KEY && !USE_CDP) {
-  console.warn(
-    "[enki-x402] CDP_API_KEY present but X402_MAINNET != '1' — running on devnet (x402.org). " +
-    "Set X402_MAINNET=1 (with valid CDP keys + IP-allowlist opt-out) for mainnet USDC.",
-  );
-}
+// facilitator — this keeps the service LIVE even if CDP keys are missing.
+const WANT_CDP = process.env.X402_MAINNET === "1" && Boolean(CDP_KEY && CDP_SECRET);
 
 // Network selection:
-//  - With CDP keys (production): mainnet — the CDP facilitator supports it.
-//  - Without CDP keys (testnet fallback x402.org): force Solana DEVNET, because
-//    the x402.org testnet facilitator only supports `exact` on solana devnet,
-//    not on mainnet (would crash at boot with a RouteConfigurationError).
 const MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
-const NETWORK = (USE_CDP
-  ? (process.env.X402_NETWORK ?? MAINNET)
-  : DEVNET) as `${string}:${string}`; // CAIP-2
 
-const FACILITATOR_URL = USE_CDP
-  ? "https://api.cdp.coinbase.com/platform/v2/x402"
-  : "https://x402.org/facilitator"; // testnet fallback, no signup
+// The x402.org testnet facilitator only supports `exact` on solana devnet,
+// not on mainnet (would crash at boot). Default to devnet.
+const FACILITATOR_URL_DEVNET = "https://x402.org/facilitator";
+const FACILITATOR_URL_CDP = "https://api.cdp.coinbase.com/platform/v2/x402";
+
+let USE_CDP = false;
+let NETWORK = DEVNET as `${string}:${string}`;
+let FACILITATOR_URL = FACILITATOR_URL_DEVNET;
+let CDP_BLOCKED_REASON = "";
+
+// Probe the CDP facilitator BEFORE building the server. If it returns 401
+// (e.g. IP-allowlist not opted out) we MUST fall back to devnet, otherwise
+// paymentMiddleware.initialize() throws at boot and Render marks the
+// service as crashed (red). This keeps the service LIVE regardless of CDP
+// account state.
+async function resolveFacilitator(): Promise<void> {
+  if (!WANT_CDP) {
+    if (CDP_KEY) {
+      console.warn(
+        "[enki-x402] CDP_API_KEY present but X402_MAINNET != '1' — running on devnet (x402.org). " +
+          "Set X402_MAINNET=1 (with valid CDP keys + IP-allowlist opt-out) for mainnet USDC.",
+      );
+    }
+    return;
+  }
+  try {
+    // CDP facilitator `supported` endpoint requires HMAC auth headers.
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const method = "POST";
+    const path = "/platform/v2/x402";
+    const payload = `${timestamp}${method}${path}`;
+    const signature = createHmac("sha256", CDP_SECRET!).update(payload).digest("hex");
+    const res = await fetch(`${FACILITATOR_URL_CDP}/supported`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CDP-API-KEY": CDP_KEY!,
+        "CDP-API-TIMESTAMP": timestamp,
+        "CDP-API-SIGNATURE": signature,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 200) {
+      USE_CDP = true;
+      NETWORK = (process.env.X402_NETWORK ?? MAINNET) as `${string}:${string}`;
+      FACILITATOR_URL = FACILITATOR_URL_CDP;
+      console.log("[enki-x402] CDP facilitator reachable — running MAINNET USDC.");
+    } else {
+      CDP_BLOCKED_REASON = `CDP facilitator responded ${res.status}`;
+      throw new Error(CDP_BLOCKED_REASON);
+    }
+  } catch (err) {
+    USE_CDP = false;
+    NETWORK = DEVNET;
+    FACILITATOR_URL = FACILITATOR_URL_DEVNET;
+    console.warn(
+      `[enki-x402] CDP facilitator blocked (${CDP_BLOCKED_REASON || String(err)}). ` +
+        "Falling back to DEVNET (x402.org). Service stays LIVE. " +
+        "To enable mainnet: opt out of CDP IP-allowlist + set X402_MAINNET=1.",
+    );
+  }
+}
 
 const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "none"; // none | openai | anthropic
 
@@ -79,88 +124,98 @@ function cdpAuthHeaders(): {
 }
 
 // ---- Facilitator + resource server ----------------------------------------
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: FACILITATOR_URL,
-  ...(USE_CDP
-    ? { createAuthHeaders: async () => cdpAuthHeaders() }
-    : {}),
-});
+// Resolve facilitator mode (mainnet CDP vs devnet fallback) BEFORE building.
+async function boot(): Promise<void> {
+  await resolveFacilitator();
 
-const server = new x402ResourceServer(facilitatorClient).register(
-  NETWORK,
-  new ExactSvmScheme(),
-);
+  const facilitatorClient = new HTTPFacilitatorClient({
+    url: FACILITATOR_URL,
+    ...(USE_CDP
+      ? { createAuthHeaders: async () => cdpAuthHeaders() }
+      : {}),
+  });
+
+  const server = new x402ResourceServer(facilitatorClient).register(
+    NETWORK,
+    new ExactSvmScheme(),
+  );
 
 // ---- App -------------------------------------------------------------------
-const app = express();
-app.use(express.json({ limit: "1mb" }));
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
 
-// Public metadata (no payment required)
-app.get("/", (_req, res) => {
-  res.json({
-    service: "enki-x402-audit-service",
-    version: "0.1.0",
-    description: "Payment-gated code security/quality audit via x402 (Solana/USDC).",
-    network: NETWORK,
-    payTo: PAY_TO,
-    price: PRICE,
-    facilitator: FACILITATOR_URL,
-    llmEnrichment: LLM_PROVIDER,
-    endpoints: {
-      "POST /audit": "Body: { code, language?, scope? } -> AuditReport (payment required)",
-      "GET /health": "Liveness probe (no payment)",
-    },
-  });
-});
-
-app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-
-// Payment-gated audit endpoint
-app.use(
-  paymentMiddleware(
-    {
-      "POST /audit": {
-        accepts: [
-          {
-            scheme: "exact",
-            price: PRICE,
-            network: NETWORK,
-            payTo: PAY_TO,
-          },
-        ],
-        description: "Automated code security & quality audit (pattern-based + optional LLM).",
-        mimeType: "application/json",
+  // Public metadata (no payment required)
+  app.get("/", (_req, res) => {
+    res.json({
+      service: "enki-x402-audit-service",
+      version: "0.1.0",
+      description: "Payment-gated code security/quality audit via x402 (Solana/USDC).",
+      network: NETWORK,
+      payTo: PAY_TO,
+      price: PRICE,
+      facilitator: FACILITATOR_URL,
+      llmEnrichment: LLM_PROVIDER,
+      endpoints: {
+        "POST /audit": "Body: { code, language?, scope? } -> AuditReport (payment required)",
+        "GET /health": "Liveness probe (no payment)",
       },
-    },
-    server,
-  ),
-);
+    });
+  });
 
-app.post("/audit", async (req, res) => {
-  const { code, language, scope } = req.body ?? {};
-  if (typeof code !== "string" || code.length === 0) {
-    return res.status(400).json({ error: "Missing 'code' string in body." });
-  }
-  if (code.length > 200_000) {
-    return res.status(413).json({ error: "Code too large (max 200k chars)." });
-  }
+  app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-  const report: AuditReport = auditCode({ code, language, scope });
+  // Payment-gated audit endpoint
+  app.use(
+    paymentMiddleware(
+      {
+        "POST /audit": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: PRICE,
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Automated code security & quality audit (pattern-based + optional LLM).",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+  );
 
-  // Optional LLM enrichment (kept separate so the service works without keys)
-  if (LLM_PROVIDER !== "none") {
-    try {
-      report.summary = `[${LLM_PROVIDER} enrichment unavailable in this build] ` + report.summary;
-    } catch {
-      /* non-fatal */
+  app.post("/audit", async (req, res) => {
+    const { code, language, scope } = req.body ?? {};
+    if (typeof code !== "string" || code.length === 0) {
+      return res.status(400).json({ error: "Missing 'code' string in body." });
     }
-  }
+    if (code.length > 200_000) {
+      return res.status(413).json({ error: "Code too large (max 200k chars)." });
+    }
 
-  res.json(report);
-});
+    const report: AuditReport = auditCode({ code, language, scope });
 
-app.listen(PORT, () => {
-  console.log(`[enki-x402] audit service listening on http://localhost:${PORT}`);
-  console.log(`[enki-x402] payTo=${PAY_TO} network=${NETWORK} price=${PRICE}`);
-  console.log(`[enki-x402] facilitator=${FACILITATOR_URL}${CDP_KEY ? " (CDP)" : " (x402.org testnet fallback)"}`);
+    // Optional LLM enrichment (kept separate so the service works without keys)
+    if (LLM_PROVIDER !== "none") {
+      try {
+        report.summary = `[${LLM_PROVIDER} enrichment unavailable in this build] ` + report.summary;
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    res.json(report);
+  });
+
+  app.listen(PORT, () => {
+    console.log(`[enki-x402] audit service listening on http://localhost:${PORT}`);
+    console.log(`[enki-x402] payTo=${PAY_TO} network=${NETWORK} price=${PRICE}`);
+    console.log(`[enki-x402] facilitator=${FACILITATOR_URL}${USE_CDP ? " (CDP mainnet)" : " (x402.org devnet fallback)"}`);
+  });
+}
+
+boot().catch((err) => {
+  console.error("[enki-x402] fatal boot error:", err);
+  process.exit(1);
 });
