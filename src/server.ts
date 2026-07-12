@@ -112,18 +112,35 @@ const CDP_OPS: Record<string, { method: "GET" | "POST"; path: string }> = {
   settle: { method: "POST", path: "/platform/v2/x402/settle" },
 };
 
-async function cdpAuthHeaders(_kind?: string): Promise<{ headers: Record<string, string> }> {
-  const kind = _kind ?? "verify";
-  const op = CDP_OPS[kind] ?? CDP_OPS.verify;
-  const jwt = await generateJwt({
-    apiKeyId: CDP_KEY!,
-    apiKeySecret: CDP_SECRET!,
-    requestMethod: op.method,
-    requestHost: "api.cdp.coinbase.com",
-    requestPath: op.path,
-    expiresIn: 120,
-  });
-  return { headers: { Authorization: `Bearer ${jwt}` } };
+// The @x402 SDK calls createAuthHeaders() with NO argument and expects back a
+// dict keyed by operation: { supported, verify, settle } (each a header map).
+// See node_modules/@x402/core/dist/esm/x402Client-*.d.mts (FacilitatorConfig).
+// We mint a fresh per-operation JWT for each, since CDP requires the JWT's
+// `uris` claim to match the exact method+path of the call.
+async function cdpAuthHeaders(): Promise<{
+  supported: Record<string, string>;
+  verify: Record<string, string>;
+  settle: Record<string, string>;
+  bazaar?: Record<string, string>;
+}> {
+  const mint = async (op: { method: "GET" | "POST"; path: string }) => {
+    const jwt = await generateJwt({
+      apiKeyId: CDP_KEY!,
+      apiKeySecret: CDP_SECRET!,
+      requestMethod: op.method,
+      requestHost: "api.cdp.coinbase.com",
+      requestPath: op.path,
+      expiresIn: 120,
+    });
+    const token = "Bearer " + jwt;
+    return { Authorization: token };
+  };
+  const [supported, verify, settle] = await Promise.all([
+    mint(CDP_OPS.supported),
+    mint(CDP_OPS.verify),
+    mint(CDP_OPS.settle),
+  ]);
+  return { supported, verify, settle };
 }
 
 // ---- Facilitator + resource server ----------------------------------------
@@ -131,17 +148,10 @@ async function boot(): Promise<void> {
   await resolveFacilitator();
 
   // Build the facilitator client (with per-operation CDP JWT auth when live).
+  // The SDK calls createAuthHeaders() -> expects { supported, verify, settle }.
   const facilitatorClient = new HTTPFacilitatorClient({
     url: FACILITATOR_URL,
-    ...(USE_CDP
-      ? {
-          createAuthHeaders: cdpAuthHeaders as unknown as () => Promise<{
-            verify: Record<string, string>;
-            settle: Record<string, string>;
-            supported: Record<string, string>;
-          }>,
-        }
-      : {}),
+    ...(USE_CDP ? { createAuthHeaders: cdpAuthHeaders } : {}),
   });
 
   // NOTE: the published @x402 .d.mts types for x402ResourceServer.register()
