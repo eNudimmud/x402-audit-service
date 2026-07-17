@@ -22,6 +22,8 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { auditCode } from "./audit.js";
 import type { AuditReport } from "./types.js";
+import { auditOnchain } from "./onchain.js";
+import type { OnchainReport } from "./onchain.js";
 
 // ---- Config from env -------------------------------------------------------
 const PORT = Number(process.env.PORT ?? 4021);
@@ -181,6 +183,19 @@ async function boot(): Promise<void> {
           description: "Automated code security & quality audit (pattern-based + optional LLM).",
           mimeType: "application/json",
         },
+        "POST /audit/onchain": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: PRICE,
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description:
+            "Real on-chain Solana audit (read-only RPC): wallet or token/contract. Returns risk flags + holder concentration + authority state.",
+          mimeType: "application/json",
+        },
       },
       server,
     ),
@@ -248,6 +263,21 @@ async function boot(): Promise<void> {
     }
 
     res.json(report);
+  });
+
+  // --- Real on-chain Solana audit (read-only RPC) ---------------------------
+  app.post("/audit/onchain", async (req, res) => {
+    const { target, kind } = req.body ?? {};
+    if (typeof target !== "string" || target.length === 0) {
+      return res.status(400).json({ error: "Missing 'target' (Solana address) in body." });
+    }
+    try {
+      const report: OnchainReport = await auditOnchain({ target, kind });
+      res.json(report);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(400).json({ error: msg });
+    }
   });
 
   app.listen(PORT, () => {

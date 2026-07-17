@@ -30,11 +30,12 @@ layer can be enabled via `LLM_PROVIDER`.
 
 | Method | Path         | Auth            | Body                              | Returns            |
 |--------|--------------|-----------------|-----------------------------------|--------------------|
-| POST   | `/audit`     | **x402 payment**| `{ code, language?, scope? }`     | `AuditReport` JSON |
+|| POST   | `/audit`       | **x402 payment**| `{ code, language?, scope? }`     | `AuditReport` JSON (code scanner) |
+| POST   | `/audit/onchain`| **x402 payment**| `{ target }` (Solana address)     | `OnchainReport` JSON (real on-chain audit) |
 | GET    | `/`          | none            | —                                 | service metadata   |
 | GET    | `/health`    | none            | —                                 | `{ ok: true }`     |
 
-### AuditReport shape
+### `POST /audit` — code scanner (pattern-based)
 `{ schemaVersion, receivedAt, language, scope, linesScanned, securityScore (0-100), severityCounts, summary, findings[], disclaimer }`
 
 `findings[]` entries: `{ ruleId, severity, category, line, snippet, message, remediation }`
@@ -46,6 +47,23 @@ hashes (MD5/SHA1), missing rate limiting, leftover console.*, TODO/FIXME.
 > **Honest scope:** this is a lightweight pattern scan, not a full SAST/DAST
 > suite. A clean result is not a guarantee of safety. It is meant to be a
 > cheap, automated first pass that agents can call per-snippet.
+
+### `POST /audit/onchain` — REAL on-chain Solana audit (read-only RPC)
+Auto-detects the target kind and returns an `OnchainReport`:
+- **Token / Token-2022 mint** → supply, decimals, mint authority state
+  (revoked = good), freeze authority state, top-5 holder concentration %,
+  rug-risk flags (critical/high).
+- **Wallet** → SOL balance, SPL token-holding count, recent activity (sig count).
+- **Unknown / program** → existence + owner only.
+
+`facts` object exposes raw on-chain values so a buyer can verify on a
+block explorer themselves. `riskScore` 0–100.
+
+> **Honest scope:** read-only RPC heuristics. Does NOT include off-chain
+> liquidity/dex data, contract *source* audit, or social signal. Some calls
+> (`getTokenLargestAccounts`) are throttled on free public RPCs — when that
+> happens the report marks concentration as "unchecked" rather than guessing.
+> Set a paid RPC URL via `SOLANA_RPC_URLS` (comma-separated) for full coverage.
 
 ---
 

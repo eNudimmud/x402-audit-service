@@ -10,6 +10,7 @@
  */
 import express from "express";
 import { auditCode } from "../dist/audit.js";
+import { auditOnchain } from "../dist/onchain.js";
 
 // Mirror of the protected handler in src/server.ts (minus the payment gate).
 function auditHandler(req, res) {
@@ -68,6 +69,15 @@ async function main() {
   check("empty code returns 400", r3.status === 400);
 
   server.close();
+
+  // 4) real on-chain audit against mainnet (no payment needed — direct call)
+  const ENKI_MINT = "DPpSmea6htoRQpLTdAnGCCdfMJ9awyatjQi3QgRDhJmU";
+  const rep = await auditOnchain({ target: ENKI_MINT });
+  check("onchain detects token-mint", rep.detectedKind === "token-mint");
+  check("onchain returns numeric riskScore", typeof rep.riskScore === "number");
+  check("onchain exposes facts", typeof rep.facts === "object" && rep.facts !== null);
+  check("onchain mint authority resolved", "mintAuthority" in rep.facts);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
