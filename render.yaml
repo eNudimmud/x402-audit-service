@@ -1,20 +1,33 @@
 services:
   - type: web
-    name: enki-x402-audit
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: free   # free tier works; note: spins down when idle (cold start on first call)
+    name: enki-x402-audit-service
+    runtime: node
+    plan: free
+    branch: master
+    repo: https://github.com/eNudimmud/x402-audit-service
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: PAY_TO
-        sync: false   # you provide your receiving Solana address
-      - key: AUDIT_PRICE_USD
-        value: "$0.05"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
       - key: X402_NETWORK
-        value: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+        value: solana:5eykt4UsFvP8NJdTREpY1vzqKqZKvdp
+      - key: PAY_TO
+        sync: false
+      - key: AUDIT_PRICE_USD
+        value: 0.04
+      - key: FACILITATOR_URL
+        value: https://x402.org/facilitator
       - key: CDP_API_KEY
-        sync: false   # you provide (CDP free tier, 1000 settles/mo)
+        sync: false
       - key: CDP_API_SECRET
-        sync: false   # you provide
+        sync: false
+      - key: WANT_MAINNET
+        value: false
+      - key: WANT_CDP
+        value: false
       - key: LLM_PROVIDER
-        value: "none"
+        value: none
