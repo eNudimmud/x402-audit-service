@@ -35,6 +35,20 @@ layer can be enabled via `LLM_PROVIDER`.
 || POST   | `/audit/forensic`| **x402 payment**| `{ url, follow?, maxBytes? }` | `ForensicReport` JSON (HTTP forensics) ||
 | GET    | `/`          | none            | —                                 | service metadata   |
 | GET    | `/health`    | none            | —                                 | `{ ok: true }`     |
+| GET    | `/catalog`   | none            | —                                 | SKU catalog JSON   |
+| POST   | `/audit`       | **x402 payment**| `{ code, language?, scope? }`     | `AuditReport` JSON (code scanner) |
+| POST   | `/audit/onchain`| **x402 payment**| `{ target }` (Solana address)     | `OnchainReport` JSON (real on-chain audit) ||
+| POST   | `/audit/forensic`| **x402 payment**| `{ url, follow?, maxBytes? }` | `ForensicReport` JSON (HTTP forensics) ||
+| POST   | `/extract/ocr` | **x402 payment**| `{ imageUrl?, mime?, text? }` | extract report |
+| POST   | `/extract/url` | **x402 payment**| `{ url, maxBytes? }` | extract report |
+| POST   | `/sentiment/en` | **x402 payment**| `{ text, lang? }` | sentiment report |
+| POST   | `/calendar/lunar` | **x402 payment**| `{ date?, tz?, lat?, lon? }` | lunar report |
+| POST   | `/plant/identify` | **x402 payment**| `{ imageUrl?, mime?, text? }` | plant report |
+| POST   | `/veille/day` | **x402 payment**| `{ date?, domains[]? }` | veille report |
+| POST   | `/vault/doctor` | **x402 payment**| `{ root?, quick? }` | vault report |
+| POST   | `/weather/point` | **x402 payment**| `{ lat?, lon?, date? }` | weather report |
+| POST   | `/summarize` | **x402 payment**| `{ text, maxSentences? }` | summary report |
+| POST   | `/dev/audit-deps` | **x402 payment**| `{ repoUrl?, pkgManager? }` | deps report |
 
 ### `POST /audit` — code scanner (pattern-based)
 `{ schemaVersion, receivedAt, language, scope, linesScanned, securityScore (0-100), severityCounts, summary, findings[], disclaimer }`

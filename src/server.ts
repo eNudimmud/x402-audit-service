@@ -26,6 +26,28 @@ import { auditOnchain } from "./onchain.js";
 import type { OnchainReport } from "./onchain.js";
 import { auditForensic } from "./forensic.js";
 import type { ForensicReport } from "./forensic.js";
+import {
+  extractOcr,
+  extractUrl,
+  sentiment,
+  lunar,
+  plantIdentify,
+  veilleDay,
+  vaultDoctor,
+  weatherPoint,
+  summarize,
+  devAuditDeps,
+  metaExtract,
+  contentHash,
+  gitStatus,
+  fileTree,
+  licenseScan,
+  agentReceipt,
+  agentUsage,
+  walletSan,
+  tokenMeta,
+  sigVerify,
+} from "./endpoints.js";
 
 // ---- Config from env -------------------------------------------------------
 const PORT = Number(process.env.PORT ?? 4021);
@@ -232,9 +254,29 @@ async function boot(): Promise<void> {
         "GET /debug": "Config resolution (no secrets)",
         "POST /audit/onchain": "Body: { target, kind? } -> OnchainReport (Solana RPC)",
         "POST /audit/forensic": "Body: { url, follow?, maxBytes? } -> ForensicReport (HTTP headers/fingerprints)",
+        "GET /catalog": "Public SKU catalog (no payment)",
+        "POST /extract/ocr": "Body: { imageUrl?, mime?, text? } -> extractOcr report",
+        "POST /extract/url": "Body: { url, maxBytes? } -> extractUrl report",
+        "POST /sentiment/en": "Body: { text, lang? } -> sentiment report",
+        "POST /calendar/lunar": "Body: { date?, tz?, lat?, lon? } -> lunar report",
+        "POST /plant/identify": "Body: { imageUrl?, mime?, text? } -> plantIdentify report",
+        "POST /veille/day": "Body: { date?, domains[]? } -> veilleDay report",
+        "POST /vault/doctor": "Body: { root?, quick? } -> vaultDoctor report",
+        "POST /weather/point": "Body: { lat?, lon?, date? } -> weatherPoint report",
+        "POST /summarize": "Body: { text, maxSentences? } -> summarize report",
+        "POST /dev/audit-deps": "Body: { repoUrl?, pkgManager? } -> devAuditDeps report",
+        "POST /meta/extract": "Body: { text, title?, mime?, sizeBytes? } -> metaExtract report",
+        "POST /content/hash": "Body: { text, algo?: sha256|sha1|md5|all } -> contentHash report",
+        "POST /dev/git-status": "Body: { repoUrl, ref? } -> gitStatus report",
+        "POST /dev/file-tree": "Body: { root?, maxDepth?, extensions? } -> fileTree report",
+        "POST /dev/license-scan": "Body: { repoUrl, path? } -> licenseScan report",
+        "POST /agent/receipt": "Body: { taskId, agentId?, status?, outputSummary? } -> agentReceipt report",
+        "POST /agent/usage": "Body: { taskId, tokensIn?, tokensOut?, durationMs? } -> agentUsage report",
+        "POST /crypto/wallet-san": "Body: { address, chain?: solana } -> walletSan report",
+        "POST /crypto/token-meta": "Body: { mint, chain?: solana } -> tokenMeta report",
+        "POST /crypto/sig-verify": "Body: { message, signature, publicKey, algorithm } -> sigVerify report",
       },
     });
-  });
 
   app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
@@ -259,6 +301,33 @@ async function boot(): Promise<void> {
       expectedMainnet: MAINNET,
     }),
   );
+
+  // ---- Public catalog (no payment) -----------------------------------------
+  app.get("/catalog", (_req, res) => {
+    const skus = [
+      { method: "POST", path: "/audit", price: PRICE, description: "Automated code security & quality audit (pattern-based + optional LLM).", mimeType: "application/json" },
+      { method: "POST", path: "/audit/onchain", price: PRICE, description: "Real on-chain Solana audit (read-only RPC): wallet or token/contract. Returns risk flags + holder concentration + authority state.", mimeType: "application/json" },
+      { method: "POST", path: "/audit/forensic", price: PRICE, description: "Off-chain HTTP forensics: headers, TLS signals, fingerprints, timing, body preview. Bypasses Cloudflare fingerprinting heuristics discovery only; no browser automation.", mimeType: "application/json" },
+      { method: "POST", path: "/extract/ocr", price: process.env.EXTRACT_OCR_PRICE_USD ?? "$0.05", description: "Image→text extraction or passthrough. Requires imageUrl or raw text.", mimeType: "application/json" },
+      { method: "POST", path: "/extract/url", price: process.env.EXTRACT_URL_PRICE_USD ?? "$0.05", description: "URL→markdown/text extraction. Body: { url, maxBytes? }.", mimeType: "application/json" },
+      { method: "POST", path: "/sentiment/en", price: process.env.SENTIMENT_PRICE_USD ?? "$0.05", description: "Lightweight sentiment scoring. Body: { text, lang? }.", mimeType: "application/json" },
+      { method: "POST", path: "/calendar/lunar", price: process.env.LUNAR_PRICE_USD ?? "$0.03", description: "Machine lunar calendar helper. Body: { date?, tz?, lat?, lon? }.", mimeType: "application/json" },
+      { method: "POST", path: "/plant/identify", price: process.env.PLANT_PRICE_USD ?? "$0.05", description: "Image/text plant identification helper. Body: { imageUrl?, mime?, text? }.", mimeType: "application/json" },
+      { method: "POST", path: "/veille/day", price: process.env.VEILLE_PRICE_USD ?? "$0.04", description: "Daily veille digest across 8 domains. Body: { date?, domains[]? }.", mimeType: "application/json" },
+      { method: "POST", path: "/vault/doctor", price: process.env.VAULT_PRICE_USD ?? "$0.03", description: "Vault health report. Body: { root?, quick? }.", mimeType: "application/json" },
+      { method: "POST", path: "/weather/point", price: process.env.WEATHER_PRICE_USD ?? "$0.04", description: "Point weather observation. Body: { lat?, lon?, date? }.", mimeType: "application/json" },
+      { method: "POST", path: "/summarize", price: process.env.SUMMARIZE_PRICE_USD ?? "$0.04", description: "Extractive summary. Body: { text, maxSentences? }.", mimeType: "application/json" },
+      { method: "POST", path: "/dev/audit-deps", price: process.env.DEV_AUDIT_DEPS_PRICE_USD ?? "$0.04", description: "Dependency manifest scan. Body: { repoUrl?, pkgManager? }.", mimeType: "application/json" },
+    ];
+    res.json({
+      service: "enki-x402-audit-service",
+      schemaVersion: "enki-catalog/1.0",
+      network: NETWORK,
+      payTo: PAY_TO,
+      facilitator: FACILITATOR_URL,
+      skus,
+    });
+  });
 
   app.post("/audit", async (req, res) => {
     const { code, language, scope } = req.body ?? {};
@@ -311,6 +380,447 @@ async function boot(): Promise<void> {
       return res.status(400).json({ error: msg });
     }
   });
+
+  // ---- Additional skill-gated endpoints ------------------------------------
+  app.post(
+    "/extract/ocr",
+    paymentMiddleware(
+      {
+        "POST /extract/ocr": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.EXTRACT_OCR_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Image→text extraction or passthrough. Requires imageUrl or raw text.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(extractOcr(req.body ?? {})),
+  );
+
+  app.post(
+    "/extract/url",
+    paymentMiddleware(
+      {
+        "POST /extract/url": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.EXTRACT_URL_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "URL→markdown/text extraction. Body: { url, maxBytes? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(extractUrl(req.body ?? {})),
+  );
+
+  app.post(
+    "/sentiment/en",
+    paymentMiddleware(
+      {
+        "POST /sentiment/en": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.SENTIMENT_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Lightweight sentiment scoring. Body: { text, lang? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(sentiment(req.body ?? {})),
+  );
+
+  app.post(
+    "/calendar/lunar",
+    paymentMiddleware(
+      {
+        "POST /calendar/lunar": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.LUNAR_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Machine lunar calendar helper. Body: { date?, tz?, lat?, lon? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(lunar(req.body ?? {})),
+  );
+
+  app.post(
+    "/plant/identify",
+    paymentMiddleware(
+      {
+        "POST /plant/identify": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.PLANT_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Image/text plant identification helper. Body: { imageUrl?, mime?, text? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(plantIdentify(req.body ?? {})),
+  );
+
+  app.post(
+    "/veille/day",
+    paymentMiddleware(
+      {
+        "POST /veille/day": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.VEILLE_PRICE_USD ?? "$0.04",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Daily veille digest across 8 domains. Body: { date?, domains[]? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(veilleDay(req.body ?? {})),
+  );
+
+  app.post(
+    "/vault/doctor",
+    paymentMiddleware(
+      {
+        "POST /vault/doctor": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.VAULT_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Vault health report. Body: { root?, quick? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(vaultDoctor(req.body ?? {})),
+  );
+
+  app.post(
+    "/weather/point",
+    paymentMiddleware(
+      {
+        "POST /weather/point": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.WEATHER_PRICE_USD ?? "$0.04",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Point weather observation. Body: { lat?, lon?, date? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(weatherPoint(req.body ?? {})),
+  );
+
+  app.post(
+    "/summarize",
+    paymentMiddleware(
+      {
+        "POST /summarize": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.SUMMARIZE_PRICE_USD ?? "$0.04",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Extractive summary. Body: { text, maxSentences? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(summarize(req.body ?? {})),
+  );
+
+  app.post(
+    "/dev/audit-deps",
+    paymentMiddleware(
+      {
+        "POST /dev/audit-deps": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.DEV_AUDIT_DEPS_PRICE_USD ?? "$0.04",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Dependency manifest scan. Body: { repoUrl?, pkgManager? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(devAuditDeps(req.body ?? {})),
+  );
+
+  app.post(
+    "/meta/extract",
+    paymentMiddleware(
+      {
+        "POST /meta/extract": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.META_EXTRACT_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Text/file metadata. Body: { text, title?, mime?, sizeBytes? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(metaExtract(req.body ?? {})),
+  );
+
+  app.post(
+    "/content/hash",
+    paymentMiddleware(
+      {
+        "POST /content/hash": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.CONTENT_HASH_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Stable hash. Body: { text, algo?: sha256|sha1|md5|all }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(contentHash(req.body ?? {})),
+  );
+
+  app.post(
+    "/dev/git-status",
+    paymentMiddleware(
+      {
+        "POST /dev/git-status": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.DEV_GIT_STATUS_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Sanitized git status. Body: { repoUrl, ref? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(gitStatus(req.body ?? {})),
+  );
+
+  app.post(
+    "/dev/file-tree",
+    paymentMiddleware(
+      {
+        "POST /dev/file-tree": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.DEV_FILE_TREE_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Sanitized tree. Body: { root?, maxDepth?, extensions? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(fileTree(req.body ?? {})),
+  );
+
+  app.post(
+    "/dev/license-scan",
+    paymentMiddleware(
+      {
+        "POST /dev/license-scan": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.DEV_LICENSE_SCAN_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "License scan. Body: { repoUrl, path? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(licenseScan(req.body ?? {})),
+  );
+
+  app.post(
+    "/agent/receipt",
+    paymentMiddleware(
+      {
+        "POST /agent/receipt": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.AGENT_RECEIPT_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Execution receipt. Body: { taskId, agentId?, status?, outputSummary? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(agentReceipt(req.body ?? {})),
+  );
+
+  app.post(
+    "/agent/usage",
+    paymentMiddleware(
+      {
+        "POST /agent/usage": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.AGENT_USAGE_PRICE_USD ?? "$0.03",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Token/time meter. Body: { taskId, tokensIn?, tokensOut?, durationMs? }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(agentUsage(req.body ?? {})),
+  );
+
+  app.post(
+    "/crypto/wallet-san",
+    paymentMiddleware(
+      {
+        "POST /crypto/wallet-san": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.CRYPTO_WALLET_SAN_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Wallet sanity check. Body: { address, chain?: solana }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(walletSan(req.body ?? {})),
+  );
+
+  app.post(
+    "/crypto/token-meta",
+    paymentMiddleware(
+      {
+        "POST /crypto/token-meta": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.CRYPTO_TOKEN_META_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Token metadata. Body: { mint, chain?: solana }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(tokenMeta(req.body ?? {})),
+  );
+
+  app.post(
+    "/crypto/sig-verify",
+    paymentMiddleware(
+      {
+        "POST /crypto/sig-verify": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: process.env.CRYPTO_SIG_VERIFY_PRICE_USD ?? "$0.05",
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description: "Signature verify stub. Body: { message, signature, publicKey, algorithm }.",
+          mimeType: "application/json",
+        },
+      },
+      server,
+    ),
+    async (req, res) => res.json(sigVerify(req.body ?? {})),
+  );
 
   app.listen(PORT, () => {
     console.log("[enki-x402] audit service listening on http://localhost:" + PORT);
