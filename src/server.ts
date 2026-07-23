@@ -24,6 +24,8 @@ import { auditCode } from "./audit.js";
 import type { AuditReport } from "./types.js";
 import { auditOnchain } from "./onchain.js";
 import type { OnchainReport } from "./onchain.js";
+import { auditForensic } from "./forensic.js";
+import type { ForensicReport } from "./forensic.js";
 
 // ---- Config from env -------------------------------------------------------
 const PORT = Number(process.env.PORT ?? 4021);
@@ -196,6 +198,19 @@ async function boot(): Promise<void> {
             "Real on-chain Solana audit (read-only RPC): wallet or token/contract. Returns risk flags + holder concentration + authority state.",
           mimeType: "application/json",
         },
+        "POST /audit/forensic": {
+          accepts: [
+            {
+              scheme: "exact",
+              price: PRICE,
+              network: NETWORK,
+              payTo: PAY_TO,
+            },
+          ],
+          description:
+            "Off-chain HTTP forensics: headers, TLS signals, fingerprints, timing, body preview. Bypasses Cloudflare fingerprinting heuristics discovery only; no browser automation.",
+          mimeType: "application/json",
+        },
       },
       server,
     ),
@@ -212,9 +227,11 @@ async function boot(): Promise<void> {
       facilitator: FACILITATOR_URL,
       llmEnrichment: LLM_PROVIDER,
       endpoints: {
-        "POST /audit": "Body: { code, language?, scope? } -> AuditReport (payment required)",
+        "POST /audit": "Body: { code, language?, scope? } -> AuditReport (code scanner)",
         "GET /health": "Liveness probe (no payment)",
         "GET /debug": "Config resolution (no secrets)",
+        "POST /audit/onchain": "Body: { target, kind? } -> OnchainReport (Solana RPC)",
+        "POST /audit/forensic": "Body: { url, follow?, maxBytes? } -> ForensicReport (HTTP headers/fingerprints)",
       },
     });
   });
@@ -273,6 +290,21 @@ async function boot(): Promise<void> {
     }
     try {
       const report: OnchainReport = await auditOnchain({ target, kind });
+      res.json(report);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(400).json({ error: msg });
+    }
+  });
+
+  // --- Off-chain HTTP forensics ---------------------------------------------
+  app.post("/audit/forensic", async (req, res) => {
+    const { url, follow, maxBytes } = req.body ?? {};
+    if (typeof url !== "string" || url.length === 0) {
+      return res.status(400).json({ error: "Missing 'url' in body." });
+    }
+    try {
+      const report: ForensicReport = await auditForensic({ url, follow, maxBytes });
       res.json(report);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

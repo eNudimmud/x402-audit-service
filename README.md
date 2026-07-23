@@ -31,7 +31,8 @@ layer can be enabled via `LLM_PROVIDER`.
 | Method | Path         | Auth            | Body                              | Returns            |
 |--------|--------------|-----------------|-----------------------------------|--------------------|
 || POST   | `/audit`       | **x402 payment**| `{ code, language?, scope? }`     | `AuditReport` JSON (code scanner) |
-| POST   | `/audit/onchain`| **x402 payment**| `{ target }` (Solana address)     | `OnchainReport` JSON (real on-chain audit) |
+|| POST   | `/audit/onchain`| **x402 payment**| `{ target }` (Solana address)     | `OnchainReport` JSON (real on-chain audit) ||
+|| POST   | `/audit/forensic`| **x402 payment**| `{ url, follow?, maxBytes? }` | `ForensicReport` JSON (HTTP forensics) ||
 | GET    | `/`          | none            | —                                 | service metadata   |
 | GET    | `/health`    | none            | —                                 | `{ ok: true }`     |
 
@@ -161,7 +162,10 @@ Override with `PAY_TO` if you fork this for your own wallet.
 src/
   types.ts    — AuditReport / AuditRequest / AuditFinding
   audit.ts    — pattern-based scanner (no LLM dependency)
+  onchain.ts  — Solana read-only RPC audit
+  forensic.ts — HTTP forensics (headers/fingerprints/timing)
   server.ts   — Express + x402 paymentMiddleware (seller)
 test/
   endpoint.test.mjs — request/response contract tests
+  forensic.test.mjs — HTTP forensics unit tests
 ```
